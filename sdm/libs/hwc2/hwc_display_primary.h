@@ -79,6 +79,7 @@ class HWCDisplayPrimary : public HWCDisplay {
   virtual HWC2::Error GetReadbackBufferFence(int32_t *release_fence);
   virtual HWC2::Error PostCommitLayerStack(int32_t *out_retire_fence);
   virtual HWC2::Error ControlIdlePowerCollapse(bool enable, bool synchronous);
+  virtual DisplayError TeardownConcurrentWriteback(void);
 
  private:
   HWCDisplayPrimary(CoreInterface *core_intf, BufferAllocator *buffer_allocator,

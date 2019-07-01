@@ -255,6 +255,12 @@ DisplayError DisplayPrimary::GetRefreshRateRange(uint32_t *min_refresh_rate,
   return error;
 }
 
+DisplayError DisplayPrimary::TeardownConcurrentWriteback(void) {
+  lock_guard<recursive_mutex> obj(recursive_mutex_);
+
+  return hw_intf_->TeardownConcurrentWriteback();
+}
+
 DisplayError DisplayPrimary::SetRefreshRate(uint32_t refresh_rate, bool final_rate) {
   lock_guard<recursive_mutex> obj(recursive_mutex_);
 
@@ -414,6 +420,19 @@ void DisplayPrimary::ResetPanel() {
   if (status != kErrorNone) {
     DLOGE("enabling vsync failed for primary with error = %d", status);
   }
+}
+
+DisplayError DisplayPrimary::ControlIdlePowerCollapse(bool enable, bool synchronous) {
+  lock_guard<recursive_mutex> obj(recursive_mutex_);
+  if (!active_) {
+    DLOGW("Invalid display state = %d. Panel must be on.", state_);
+    return kErrorPermission;
+  }
+  if (hw_panel_info_.mode == kModeVideo) {
+    DLOGW("Idle power collapse not supported for video mode panel.");
+    return kErrorNotSupported;
+  }
+  return hw_intf_->ControlIdlePowerCollapse(enable, synchronous);
 }
 
 }  // namespace sdm

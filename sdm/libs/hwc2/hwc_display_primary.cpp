@@ -46,6 +46,50 @@
 
 namespace sdm {
 
+DisplayError HWCDisplayPrimary::PMICInterface::Init() {
+  std::string str_lcd_bias("/sys/class/lcd_bias/secure_mode");
+  fd_lcd_bias_ = ::open(str_lcd_bias.c_str(), O_WRONLY);
+  if (fd_lcd_bias_ < 0) {
+    DLOGE("File '%s' could not be opened. errno = %d, desc = %s", str_lcd_bias.c_str(), errno,
+          strerror(errno));
+    return kErrorHardware;
+  }
+
+  std::string str_leds_wled("/sys/class/leds/wled/secure_mode");
+  fd_wled_ = ::open(str_leds_wled.c_str(), O_WRONLY);
+  if (fd_wled_ < 0) {
+    DLOGE("File '%s' could not be opened. errno = %d, desc = %s", str_leds_wled.c_str(), errno,
+          strerror(errno));
+    return kErrorHardware;
+  }
+
+  return kErrorNone;
+}
+
+void HWCDisplayPrimary::PMICInterface::Deinit() {
+  ::close(fd_lcd_bias_);
+  ::close(fd_wled_);
+}
+
+DisplayError HWCDisplayPrimary::PMICInterface::Notify(bool secure_display_start) {
+  std::string str_sd_start = secure_display_start ? std::to_string(1) : std::to_string(0);
+  ssize_t err = ::pwrite(fd_lcd_bias_, str_sd_start.c_str(), str_sd_start.length(), 0);
+  if (err <= 0) {
+    DLOGE("Write failed for lcd_bias, Error = %s", strerror(errno));
+    return kErrorHardware;
+  }
+
+  err = ::pwrite(fd_wled_, str_sd_start.c_str(), str_sd_start.length(), 0);
+  if (err <= 0) {
+    DLOGE("Write failed for wled, Error = %s", strerror(errno));
+    return kErrorHardware;
+  }
+
+  DLOGI("Successfully notifed about secure display %s to PMIC driver",
+        secure_display_start ? "start": "end");
+  return kErrorNone;
+}
+
 int HWCDisplayPrimary::Create(CoreInterface *core_intf, BufferAllocator *buffer_allocator,
                               HWCCallbacks *callbacks, qService::QService *qservice,
                               HWCDisplay **hwc_display) {
@@ -116,7 +160,27 @@ int HWCDisplayPrimary::Init() {
   color_mode_->Init();
   HWCDebugHandler::Get()->GetProperty(ENABLE_DEFAULT_COLOR_MODE, &default_mode_status_);
 
+  pmic_intf_ = new PMICInterface();
+  pmic_intf_->Init();
+
   return status;
+}
+
+int HWCDisplayPrimary::Deinit() {
+  histogram.stop();
+
+  int status = HWCDisplay::Deinit();
+  if (status) {
+    return status;
+  }
+  pmic_intf_->Deinit();
+  delete pmic_intf_;
+
+  return 0;
+}
+
+std::string HWCDisplayPrimary::Dump() {
+  return HWCDisplay::Dump() + histogram.Dump();
 }
 
 void HWCDisplayPrimary::ProcessBootAnimCompleted() {
@@ -198,6 +262,7 @@ HWC2::Error HWCDisplayPrimary::Validate(uint32_t *out_num_types, uint32_t *out_n
     // here in a subsequent draw round. Readback is not allowed for any secure use case.
     readback_configured_ = !layer_stack_.flags.secure_present;
     if (readback_configured_) {
+      DisablePartialUpdateOneFrame();
       layer_stack_.output_buffer = &output_buffer_;
       layer_stack_.flags.post_processed_output = post_processed_output_;
     }
@@ -247,7 +312,7 @@ HWC2::Error HWCDisplayPrimary::Present(int32_t *out_retire_fence) {
     if (status == HWC2::Error::None) {
       HandleFrameOutput();
       SolidFillCommit();
-      status = HWCDisplay::PostCommitLayerStack(out_retire_fence);
+      status = PostCommitLayerStack(out_retire_fence);
     }
   }
 
@@ -305,6 +370,18 @@ HWC2::Error HWCDisplayPrimary::GetRenderIntents(ColorMode mode, uint32_t *out_nu
 
 HWC2::Error HWCDisplayPrimary::SetColorMode(ColorMode mode) {
   return SetColorModeWithRenderIntent(mode, RenderIntent::COLORIMETRIC);
+}
+
+HWC2::Error HWCDisplayPrimary::SetWhiteCompensation(bool enabled) {
+  auto status = color_mode_->SetWhiteCompensation(enabled);
+  if (status != HWC2::Error::None) {
+    DLOGE("failed for SetWhiteCompensation to %d", enabled);
+    return status;
+  }
+
+  callbacks_->Refresh(HWC_DISPLAY_PRIMARY);
+
+  return status;
 }
 
 HWC2::Error HWCDisplayPrimary::SetColorModeWithRenderIntent(ColorMode mode, RenderIntent intent) {
@@ -391,7 +468,6 @@ HWC2::Error HWCDisplayPrimary::SetReadbackBuffer(const native_handle_t *buffer,
   readback_configured_ = false;
   validated_ = false;
 
-  DisablePartialUpdateOneFrame();
   return HWC2::Error::None;
 }
 
@@ -411,6 +487,48 @@ HWC2::Error HWCDisplayPrimary::GetReadbackBufferFence(int32_t *release_fence) {
   output_buffer_ = {};
 
   return status;
+}
+
+HWC2::Error HWCDisplayPrimary::PostCommitLayerStack(int32_t *out_retire_fence) {
+  auto status = HWCDisplay::PostCommitLayerStack(out_retire_fence);
+  if (status != HWC2::Error::None) {
+    return status;
+  }
+
+  if (pmic_notification_pending_) {
+    // Wait for current commit to complete
+    if (*out_retire_fence >= 0) {
+      int ret = sync_wait(*out_retire_fence, 1000);
+      if (ret < 0) {
+        DLOGE("sync_wait error errno = %d, desc = %s", errno, strerror(errno));
+      }
+    }
+    pmic_intf_->Notify(false /* secure_display_start */);
+    pmic_notification_pending_ = false;
+  }
+  return HWC2::Error::None;
+}
+
+DisplayError HWCDisplayPrimary::TeardownConcurrentWriteback(void) {
+  DisplayError error = kErrorNotSupported;
+
+  if (output_buffer_.release_fence_fd >= 0) {
+    int32_t release_fence_fd = dup(output_buffer_.release_fence_fd);
+    int ret = sync_wait(output_buffer_.release_fence_fd, 1000);
+    if (ret < 0) {
+      DLOGE("sync_wait error errno = %d, desc = %s", errno, strerror(errno));
+    }
+
+    ::close(release_fence_fd);
+    if (ret)
+      return kErrorResources;
+  }
+
+  if (display_intf_) {
+    error = display_intf_->TeardownConcurrentWriteback();
+  }
+
+  return error;
 }
 
 int HWCDisplayPrimary::Perform(uint32_t operation, ...) {
@@ -499,6 +617,11 @@ void HWCDisplayPrimary::SetSecureDisplay(bool secure_display_active) {
     DLOGI("SecureDisplay state changed from %d to %d Needs Flush!!", secure_display_active_,
           secure_display_active);
     secure_display_active_ = secure_display_active;
+    if (secure_display_active_) {
+      pmic_intf_->Notify(true /* secure_display_start */);
+    } else {
+      pmic_notification_pending_ = true;
+    }
 
     // Avoid flush for Command mode panel.
     DisplayConfigFixedInfo display_config;
@@ -709,6 +832,55 @@ DisplayError HWCDisplayPrimary::DisablePartialUpdateOneFrame() {
   return error;
 }
 
+HWC2::Error HWCDisplayPrimary::SetDisplayedContentSamplingEnabledVndService(bool enabled) {
+  std::unique_lock<decltype(sampling_mutex)> lk(sampling_mutex);
+  vndservice_sampling_vote = enabled;
+  if (api_sampling_vote || vndservice_sampling_vote) {
+    histogram.start();
+  } else {
+    histogram.stop();
+  }
+  return HWC2::Error::None;
+}
+
+HWC2::Error HWCDisplayPrimary::SetDisplayedContentSamplingEnabled(int32_t enabled, uint8_t component_mask, uint64_t max_frames) {
+    if ((enabled != HWC2_DISPLAYED_CONTENT_SAMPLING_ENABLE) &&
+        (enabled != HWC2_DISPLAYED_CONTENT_SAMPLING_DISABLE))
+      return HWC2::Error::BadParameter;
+
+    std::unique_lock<decltype(sampling_mutex)> lk(sampling_mutex);
+    if (enabled == HWC2_DISPLAYED_CONTENT_SAMPLING_ENABLE) {
+      api_sampling_vote = true;
+    } else {
+      api_sampling_vote = false;
+    }
+
+    auto start = api_sampling_vote || vndservice_sampling_vote;
+    if (start && max_frames == 0) {
+        histogram.start();
+    } else if (start) {
+        histogram.start(max_frames);
+    } else {
+        histogram.stop();
+    }
+    return HWC2::Error::None;
+}
+
+HWC2::Error HWCDisplayPrimary::GetDisplayedContentSamplingAttributes(int32_t* format,
+                                                                     int32_t* dataspace,
+                                                                     uint8_t* supported_components) {
+    return histogram.getAttributes(format, dataspace, supported_components);
+}
+
+HWC2::Error HWCDisplayPrimary::GetDisplayedContentSample(uint64_t max_frames,
+                                                         uint64_t timestamp,
+                                                         uint64_t* numFrames,
+                                                         int32_t samples_size[NUM_HISTOGRAM_COLOR_COMPONENTS],
+                                                         uint64_t* samples[NUM_HISTOGRAM_COLOR_COMPONENTS])
+{
+    histogram.collect(max_frames, timestamp, samples_size, samples, numFrames);
+    return HWC2::Error::None;
+}
 
 DisplayError HWCDisplayPrimary::SetMixerResolution(uint32_t width, uint32_t height) {
   DisplayError error = display_intf_->SetMixerResolution(width, height);
@@ -718,6 +890,17 @@ DisplayError HWCDisplayPrimary::SetMixerResolution(uint32_t width, uint32_t heig
 
 DisplayError HWCDisplayPrimary::GetMixerResolution(uint32_t *width, uint32_t *height) {
   return display_intf_->GetMixerResolution(width, height);
+}
+
+HWC2::Error HWCDisplayPrimary::ControlIdlePowerCollapse(bool enable, bool synchronous) {
+  DisplayError error = kErrorNone;
+
+  if (display_intf_) {
+    error = display_intf_->ControlIdlePowerCollapse(enable, synchronous);
+    validated_ = false;
+  }
+
+  return (error != kErrorNone) ?  HWC2::Error::Unsupported : HWC2::Error::None;
 }
 
 }  // namespace sdm

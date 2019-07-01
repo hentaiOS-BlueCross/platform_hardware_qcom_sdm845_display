@@ -88,11 +88,14 @@
 #define DISABLE_FB_CROPPING_PROP             DISPLAY_PROP("disable_fb_cropping")
 #define PRIORITIZE_CACHE_COMPOSITION_PROP    DISPLAY_PROP("prioritize_cache_comp")
 #define DISABLE_FBID_CACHE                   DISPLAY_PROP("disable_fbid_cache")
+#define DROP_SKEWED_VSYNC_PROP               DISPLAY_PROP("drop_skewed_vsync")
 
 #define DISABLE_HDR_LUT_GEN                  DISPLAY_PROP("disable_hdr_lut_gen")
 #define ENABLE_DEFAULT_COLOR_MODE            DISPLAY_PROP("enable_default_color_mode")
 #define DISABLE_HDR                          DISPLAY_PROP("disable_hdr")
 #define DATASPACE_SATURATION_MATRIX_PROP     DISPLAY_PROP("dataspace_saturation_matrix")
+#define ADAPTIVE_WHITE_COEFFICIENT_PROP      DISPLAY_PROP("adaptive_white_coefficient")
+#define ADAPTIVE_SATURATION_PARAMETER_PROP   DISPLAY_PROP("adaptive_saturation_parameter")
 
 #define HDR_CONFIG_PROP                      RO_DISPLAY_PROP("hdr.config")
 #define QDCM_PCC_TRANS_PROP                  DISPLAY_PROP("qdcm.pcc_for_trans")

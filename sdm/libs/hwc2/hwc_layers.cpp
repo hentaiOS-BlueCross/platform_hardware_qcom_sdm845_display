@@ -110,9 +110,6 @@ bool GetTransfer(const int32_t &dataspace, GammaTransfer *gamma_transfer) {
     case HAL_DATASPACE_TRANSFER_HLG:
       *gamma_transfer = Transfer_HLG;
       break;
-    case HAL_DATASPACE_TRANSFER_LINEAR:
-      *gamma_transfer = Transfer_Linear;
-      break;
     case HAL_DATASPACE_TRANSFER_GAMMA2_2:
       *gamma_transfer = Transfer_Gamma2_2;
       break;
@@ -145,6 +142,25 @@ bool IsBT2020(const ColorPrimaries &color_primary) {
     break;
   default:
     return false;
+  }
+}
+
+// Map the known color modes to dataspace.
+int32_t GetDataspace(ColorMode mode) {
+  switch (mode) {
+    case ColorMode::SRGB:
+    case ColorMode::NATIVE:
+      return HAL_DATASPACE_V0_SRGB;
+    case ColorMode::DCI_P3:
+      return HAL_DATASPACE_DCI_P3;
+    case ColorMode::DISPLAY_P3:
+      return HAL_DATASPACE_DISPLAY_P3;
+    case ColorMode::BT2100_PQ:
+      return HAL_DATASPACE_BT2020_PQ;
+    case ColorMode::BT2100_HLG:
+      return HAL_DATASPACE_BT2020_HLG;
+    default:
+      return HAL_DATASPACE_UNKNOWN;
   }
 }
 
@@ -870,18 +886,23 @@ bool HWCLayer::SupportLocalConversion(ColorPrimaries working_primaries) {
     return true;
   }
 
-  if (working_primaries == ColorPrimaries_BT709_5 && layer_->input_buffer.flags.video &&
+  if ((working_primaries == ColorPrimaries_BT709_5 || working_primaries == ColorPrimaries_DCIP3) &&
+      layer_->input_buffer.flags.video &&
       IsBT2020(layer_->input_buffer.color_metadata.colorPrimaries) &&
       layer_->input_buffer.color_metadata.transfer == Transfer_SMPTE_170M) {
     return true;
   }
+
+  if (layer_->input_buffer.flags.secure)
+    return true;
 
   return false;
 }
 
 bool HWCLayer::ValidateAndSetCSC() {
   if (client_requested_ != HWC2::Composition::Device &&
-      client_requested_ != HWC2::Composition::Cursor) {
+      client_requested_ != HWC2::Composition::Cursor &&
+      client_requested_ != HWC2::Composition::SolidColor) {
     // Check the layers which are configured to Device
     return true;
   }
@@ -907,7 +928,7 @@ bool HWCLayer::ValidateAndSetCSC() {
      use_color_metadata = true;
   }
 
-  if (use_color_metadata) {
+  if (use_color_metadata && client_requested_ != HWC2::Composition::SolidColor) {
     const private_handle_t *handle =
       reinterpret_cast<const private_handle_t *>(layer_buffer->buffer_id);
     if (sdm::SetCSC(handle, &layer_buffer->color_metadata) != kErrorNone) {

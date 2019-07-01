@@ -97,6 +97,10 @@ class HWDevice : public HWInterface {
   virtual DisplayError SetMixerAttributes(const HWMixerAttributes &mixer_attributes);
   virtual DisplayError GetMixerAttributes(HWMixerAttributes *mixer_attributes);
   virtual DisplayError DumpDebugData();
+  virtual DisplayError ControlIdlePowerCollapse(bool enable, bool synchronous) {
+    return kErrorNotSupported;
+  }
+  virtual DisplayError TeardownConcurrentWriteback(void) { return kErrorNotSupported; }
 
   enum {
     kHWEventVSync,

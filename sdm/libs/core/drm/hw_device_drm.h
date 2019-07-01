@@ -51,6 +51,11 @@
 namespace sdm {
 class HWInfoInterface;
 
+struct CWBConfig {
+  bool enabled = false;
+  sde_drm::DRMDisplayToken token = {};
+};
+
 class HWDeviceDRM : public HWInterface {
  public:
   HWDeviceDRM(BufferSyncHandler *buffer_sync_handler, BufferAllocator *buffer_allocator,
@@ -98,9 +103,13 @@ class HWDeviceDRM : public HWInterface {
   virtual DisplayError SetScaleLutConfig(HWScaleLutInfo *lut_info);
   virtual DisplayError SetMixerAttributes(const HWMixerAttributes &mixer_attributes);
   virtual DisplayError GetMixerAttributes(HWMixerAttributes *mixer_attributes);
+  virtual DisplayError TeardownConcurrentWriteback(void) { return kErrorNotSupported; }
   virtual void InitializeConfigs();
   virtual DisplayError DumpDebugData() { return kErrorNone; }
   virtual void PopulateHWPanelInfo();
+  virtual DisplayError ControlIdlePowerCollapse(bool enable, bool synchronous) {
+    return kErrorNotSupported;
+  }
 
   enum {
     kHWEventVSync,
@@ -123,6 +132,7 @@ class HWDeviceDRM : public HWInterface {
   void UpdateMixerAttributes();
   void SetSolidfillStages();
   void AddSolidfillStage(const HWSolidfillStage &sf, uint32_t plane_alpha);
+  void ClearSolidfillStages();
   void SetBlending(const LayerBlending &source, sde_drm::DRMBlendType *target);
   void SetSrcConfig(const LayerBuffer &input_buffer, const HWRotatorMode &mode, uint32_t *config);
   void SelectCscType(const LayerBuffer &input_buffer, sde_drm::DRMCscType *type);
@@ -182,9 +192,10 @@ class HWDeviceDRM : public HWInterface {
   uint32_t current_mode_index_ = 0;
   sde_drm::DRMConnectorInfo connector_info_ = {};
   bool first_cycle_ = true;
+  bool synchronous_commit_ = false;
+  CWBConfig cwb_config_ = {};
 
  private:
-  bool synchronous_commit_ = false;
   HWMixerAttributes mixer_attributes_ = {};
   std::string interface_str_ = "DSI";
   std::vector<sde_drm::DRMSolidfillStage> solid_fills_ {};

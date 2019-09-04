@@ -51,6 +51,7 @@ class DisplayPrimary : public DisplayBase, HWEventHandler {
   virtual DisplayError SetRefreshRate(uint32_t refresh_rate, bool final_rate);
   virtual DisplayError SetPanelBrightness(int level);
   virtual DisplayError GetPanelBrightness(int *level);
+  virtual DisplayError ControlIdlePowerCollapse(bool enable, bool synchronous);
 
   // Implement the HWEventHandlers
   virtual DisplayError VSync(int64_t timestamp);
@@ -61,6 +62,7 @@ class DisplayPrimary : public DisplayBase, HWEventHandler {
   virtual void IdlePowerCollapse();
   virtual void PingPongTimeout();
   virtual void PanelDead();
+  virtual DisplayError TeardownConcurrentWriteback(void);
 
  private:
   bool NeedsAVREnable();

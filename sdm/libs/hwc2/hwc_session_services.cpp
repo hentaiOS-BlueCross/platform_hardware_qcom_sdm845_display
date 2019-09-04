@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -158,7 +158,8 @@ Return<int32_t> HWCSession::configureDynRefeshRate(IDisplayConfig::DisplayDynRef
 }
 
 int32_t HWCSession::GetConfigCount(int disp_id, uint32_t *count) {
-  if (disp_id < 0) {
+  if (disp_id < HWC_DISPLAY_PRIMARY || disp_id >= HWC_NUM_DISPLAY_TYPES) {
+    DLOGE("Invalid display = %d", disp_id);
     return -EINVAL;
   }
 
@@ -182,7 +183,8 @@ Return<void> HWCSession::getConfigCount(IDisplayConfig::DisplayType dpy,
 }
 
 int32_t HWCSession::GetActiveConfigIndex(int disp_id, uint32_t *config) {
-  if (disp_id < 0) {
+  if (disp_id < HWC_DISPLAY_PRIMARY || disp_id >= HWC_NUM_DISPLAY_TYPES) {
+    DLOGE("Invalid display = %d", disp_id);
     return -EINVAL;
   }
 
@@ -206,7 +208,8 @@ Return<void> HWCSession::getActiveConfig(IDisplayConfig::DisplayType dpy,
 }
 
 int32_t HWCSession::SetActiveConfigIndex(int disp_id, uint32_t config) {
-  if (disp_id < 0) {
+  if (disp_id < HWC_DISPLAY_PRIMARY || disp_id >= HWC_NUM_DISPLAY_TYPES) {
+    DLOGE("Invalid display = %d", disp_id);
     return -EINVAL;
   }
 
@@ -295,7 +298,8 @@ Return<void> HWCSession::getPanelBrightness(getPanelBrightness_cb _hidl_cb) {
 int32_t HWCSession::MinHdcpEncryptionLevelChanged(int disp_id, uint32_t min_enc_level) {
   DLOGI("Display %d", disp_id);
 
-  if (disp_id < 0) {
+  if (disp_id < HWC_DISPLAY_PRIMARY || disp_id >= HWC_NUM_DISPLAY_TYPES) {
+    DLOGE("Invalid display = %d", disp_id);
     return -EINVAL;
   }
 
@@ -324,7 +328,8 @@ Return<int32_t> HWCSession::refreshScreen() {
 }
 
 int32_t HWCSession::ControlPartialUpdate(int disp_id, bool enable) {
-  if (disp_id < 0) {
+  if (disp_id < HWC_DISPLAY_PRIMARY || disp_id >= HWC_NUM_DISPLAY_TYPES) {
+    DLOGE("Invalid display = %d", disp_id);
     return -EINVAL;
   }
 
@@ -357,7 +362,7 @@ int32_t HWCSession::ControlPartialUpdate(int disp_id, bool enable) {
   Refresh(HWC_DISPLAY_PRIMARY);
 
   // Wait until partial update control is complete
-  int32_t error = locker_[disp_id].WaitFinite(kPartialUpdateControlTimeoutMs);
+  int32_t error = locker_[disp_id].WaitFinite(kCommitDoneTimeoutMs);
 
   return error;
 }
@@ -507,5 +512,52 @@ Return<void> HWCSession::displayBWTransactionPending(displayBWTransactionPending
 
   return Void();
 }
+#ifdef DISPLAY_CONFIG_1_1
+// Methods from ::vendor::hardware::display::config::V1_1::IDisplayConfig follow.
+Return<int32_t> HWCSession::setDisplayAnimating(uint64_t display_id, bool animating ) {
+  return CallDisplayFunction(static_cast<hwc2_device_t *>(this), display_id,
+                             &HWCDisplay::SetDisplayAnimating, animating);
+}
+#endif
+
+#ifdef DISPLAY_CONFIG_1_3
+Return<int32_t> HWCSession::controlIdlePowerCollapse(bool enable, bool synchronous) {
+  SEQUENCE_WAIT_SCOPE_LOCK(locker_[HWC_DISPLAY_PRIMARY]);
+
+  if (hwc_display_[HWC_DISPLAY_PRIMARY]) {
+    if (!enable) {
+      if (!idle_pc_ref_cnt_) {
+        HWC2::Error err =
+            hwc_display_[HWC_DISPLAY_PRIMARY]->ControlIdlePowerCollapse(enable, synchronous);
+        if (err == HWC2::Error::Unsupported) {
+          return 0;
+        }
+        Refresh(HWC_DISPLAY_PRIMARY);
+        int32_t error = locker_[HWC_DISPLAY_PRIMARY].WaitFinite(kCommitDoneTimeoutMs);
+        if (error == ETIMEDOUT) {
+          DLOGE("Timed out!! Next frame commit done event not received!!");
+          return error;
+        }
+        DLOGI("Idle PC disabled!!");
+      }
+      idle_pc_ref_cnt_++;
+    } else if (idle_pc_ref_cnt_ > 0) {
+      if (!(idle_pc_ref_cnt_ - 1)) {
+        HWC2::Error err =
+            hwc_display_[HWC_DISPLAY_PRIMARY]->ControlIdlePowerCollapse(enable, synchronous);
+        if (err == HWC2::Error::Unsupported) {
+          return 0;
+        }
+        DLOGI("Idle PC enabled!!");
+      }
+      idle_pc_ref_cnt_--;
+    }
+    return 0;
+  }
+
+  DLOGW("Display = %d is not connected.", HWC_DISPLAY_PRIMARY);
+  return -ENODEV;
+}
+#endif  // DISPLAY_CONFIG_1_3
 
 }  // namespace sdm

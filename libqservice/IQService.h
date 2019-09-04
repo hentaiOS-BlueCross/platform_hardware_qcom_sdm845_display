@@ -78,6 +78,11 @@ public:
         SET_COLOR_MODE_BY_ID = 36, // Overrides the QDCM mode using the given mode ID
         GET_COMPOSER_STATUS = 37, // Get composer init status-true if primary display init is done
         SET_COLOR_MODE_WITH_RENDER_INTENT = 38,
+        SET_IDLE_PC = 39, // Enable/disable Idle power collapse
+
+        // Start custom transactions from 200
+        SET_COLOR_SAMPLING_ENABLED = 200, // Toggle the collection of display color stats
+        SET_WHITE_COMPENSATION = 201, // Enable/disable white point compensation
         COMMAND_LIST_END = 400,
     };
 

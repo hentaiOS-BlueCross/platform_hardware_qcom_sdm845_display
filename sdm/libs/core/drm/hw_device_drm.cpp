@@ -755,16 +755,6 @@ DisplayError HWDeviceDRM::GetConfigIndex(char *mode, uint32_t *index) {
 }
 
 DisplayError HWDeviceDRM::PowerOn(int *release_fence) {
-  DTRACE_SCOPED();
-  if (!drm_atomic_intf_) {
-    DLOGE("DRM Atomic Interface is null!");
-    return kErrorUndefined;
-  }
-
-  if (first_cycle_) {
-    return kErrorNone;
-  }
-
   update_mode_ = true;
   drm_atomic_intf_->Perform(DRMOps::CRTC_SET_ACTIVE, token_.crtc_id, 1);
   drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_POWER_MODE, token_.conn_id, DRMPowerMode::ON);
@@ -791,6 +781,13 @@ DisplayError HWDeviceDRM::PowerOff() {
   drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_POWER_MODE, token_.conn_id, DRMPowerMode::OFF);
   drm_atomic_intf_->Perform(DRMOps::CRTC_SET_ACTIVE, token_.crtc_id, 0);
   int ret = drm_atomic_intf_->Commit(true /* synchronous */, false /* retain_planes */);
+  drm_atomic_intf_->Perform(DRMOps::CRTC_SET_MODE, token_.crtc_id, &current_mode);
+  if (cwb_config_.enabled) {
+    drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_CRTC, cwb_config_.token.conn_id, 0);
+    drm_mgr_intf_->UnregisterDisplay(cwb_config_.token);
+    cwb_config_.enabled = false;
+    registry_.Clear();
+  }
   if (ret) {
     DLOGE("Failed with error: %d", ret);
     return kErrorHardware;
@@ -1057,6 +1054,11 @@ void HWDeviceDRM::SetSolidfillStages() {
   }
 }
 
+void HWDeviceDRM::ClearSolidfillStages() {
+  solid_fills_.clear();
+  SetSolidfillStages();
+}
+
 DisplayError HWDeviceDRM::Validate(HWLayers *hw_layers) {
   DTRACE_SCOPED();
 
@@ -1143,7 +1145,7 @@ DisplayError HWDeviceDRM::AtomicCommit(HWLayers *hw_layers) {
   DTRACE_SCOPED();
   SetupAtomic(hw_layers, false /* validate */);
 
-  int ret = drm_atomic_intf_->Commit(false /* synchronous */, false /* retain_planes*/);
+  int ret = drm_atomic_intf_->Commit(synchronous_commit_, false /* retain_planes*/);
   if (ret) {
     DLOGE("%s failed with error %d crtc %d", __FUNCTION__, ret, token_.crtc_id);
     vrefresh_ = 0;
@@ -1194,6 +1196,7 @@ DisplayError HWDeviceDRM::AtomicCommit(HWLayers *hw_layers) {
 
 DisplayError HWDeviceDRM::Flush() {
   DTRACE_SCOPED();
+  ClearSolidfillStages();
   int ret = drm_atomic_intf_->Commit(false /* synchronous */, false /* retain_planes*/);
   if (ret) {
     DLOGE("failed with error %d", ret);
